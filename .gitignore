@@ -1,0 +1,50 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of go coverage tool
+*.out
+coverage.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+build/
+coverage
+
+# Agent orchestration metadata
+.ai/
+.omo/
+
+# Runtime artifacts
+server.exe
+server.test.exe

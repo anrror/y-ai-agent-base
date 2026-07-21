@@ -1,0 +1,26 @@
+# y-ai-agent-base Configuration
+# Copy this file to config/config.yaml and adjust values.
+# Secrets (api_key, jwt_secret) can also be set via environment variables:
+#   YAI_LLM_API_KEY, YAI_AUTH_JWT_SECRET
+
+server:
+  port: 8080          # HTTP server listen port
+  mode: development   # development | production
+
+llm:
+  api_key: ""         # REQUIRED: LLM provider API key
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+
+database:
+  mysql: ""           # MySQL DSN (user:pass@tcp(host:port)/dbname)
+  postgresql: ""      # PostgreSQL DSN (postgres://user:pass@host:port/dbname?sslmode=disable)
+  redis: ""           # Redis DSN (redis://user:pass@host:port/db)
+
+auth:
+  jwt_secret: ""      # REQUIRED: JWT signing secret (min 32 chars recommended)
+  jwt_expiry: 24h     # JWT token expiry duration
+
+logging:
+  level: info         # debug | info | warn | error
+  format: text        # text | json

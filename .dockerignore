@@ -1,0 +1,32 @@
+# Git
+.git
+
+# AI-OS
+.omo
+.ai
+
+# Editor & lint config
+.editorconfig
+.golangci.yml
+
+# Build artifacts
+.gotmp/
+coverage
+coverage.out
+
+# Docs (keep README.md)
+*.md
+!README.md
+
+# Examples
+examples/
+
+# Config examples
+config/*.example.yaml
+
+# Build tooling
+Makefile
+docker-compose.yml
+
+# Node (if any)
+node_modules/

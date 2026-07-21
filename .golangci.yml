@@ -1,0 +1,73 @@
+version: "2"
+
+run:
+  timeout: 3m
+  modules-download-mode: readonly
+  tests: true
+  allow-parallel-runners: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - errorlint
+    - bodyclose
+    - nilnil
+    - noctx
+    - wrapcheck
+    - goconst
+    - durationcheck
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    staticcheck:
+      checks: ["all", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - wrapcheck
+          - bodyclose
+          - gosec
+          - goconst
+          - noctx
+      - path: internal/handler/agent.go
+        linters:
+          - goconst
+      - path: internal/handler/chat.go
+        linters:
+          - goconst
+      - path: internal/middleware/middleware.go
+        linters:
+          - goconst
+      - path: pkg/personality/personality.go
+        linters:
+          - goconst
+      - path: cmd/server/main.go
+        linters:
+          - goconst
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/anrror/y-ai-agent-base
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
