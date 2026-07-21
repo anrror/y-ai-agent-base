@@ -44,6 +44,29 @@ coverage
 # Agent orchestration metadata
 .ai/
 .omo/
+.agents/
+.opencode/
+.codex/
+.claude/
+.cursor/
+.copilot/
+.windsurf/
+
+# Secrets & credentials
+*.secret
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+credentials*
+secrets*
+
+# Logs & debug
+*.log
+*.tmp
+*.temp
+*.bak
 
 # Runtime artifacts
 server.exe

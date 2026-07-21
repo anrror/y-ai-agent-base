@@ -18,6 +18,7 @@
 - [Provider 配置](#provider-配置)
 - [API 接口](#api-接口)
 - [Agent 系统](#agent-系统)
+- [知识系统](#知识系统)
 - [模块系统](#模块系统)
 - [多 Agent 协作](#多-agent-协作)
 - [技能系统](#技能系统)
@@ -45,6 +46,7 @@
 | **运维友好** | 内置 JWT、限流、CORS、健康检查、Prometheus 指标、热重载、结构化日志 | 需额外集成 Prometheus、nginx、logstash 等 |
 | **可观测性** | `slog` 结构化日志 + Metrics 中间件，请求 ID、延迟、Agent ID 全链路跟踪 | OpenTelemetry 配置重，依赖 exporter 部署 |
 | **记忆系统** | 多层次记忆存储，支持 TTL 自动过期，可扩展 Store 接口 | LangChain 记忆实现复杂且性能瓶颈明显 |
+| **知识系统** | 内置可插拔知识系统：多 Retriever 并行检索（本地 Store + Web Search + URL Fetch），HybridMerge 去重排序，自动注册 Tool（search_knowledge / search_web / fetch_url），LLM 自主调用 | LangChain 知识检索链条冗长，Retriever/Tool 分离需手动编排 |
 | **二进制体积** | 单一静态二进制 ~15MB，scratch 容器镜像 | 容器镜像通常 >800MB，层数多，攻击面大 |
 
 ---
@@ -69,6 +71,7 @@
 │              │     Agent 系统            │                     │
 │              │  Registry + Pipeline      │                     │
 │              │  + Skills + Tools         │                     │
+│              │  + Knowledge              │                     │
 │              └────────────┬─────────────┘                     │
 │                           ▼                                   │
 │              ┌──────────────────────────┐                     │
@@ -91,7 +94,7 @@
 | 层 | 职责 | 可扩展方式 |
 |----|------|-----------|
 | **Module 层** | 业务模块插件系统 — 每个模块自带路由、配置、健康检查、生命周期 | 实现 `module.Module` 接口 |
-| **Agent 层** | Agent 编排、Pipeline 中间件、工具调用、记忆、技能挂载 | 实现 `component.Component` 注入中间件 |
+| **Agent 层** | Agent 编排、Pipeline 中间件、工具调用、记忆、技能挂载、知识检索 | 实现 `component.Component` 注入中间件 |
 | **Provider 层** | LLM/Embedding/Guard 三合一管理，每个角色独立配置 | 实现 `provider.LLMProvider` / `EmbeddingProvider` / `GuardProvider` 接口 |
 | **HTTP 层** | Gin HTTP 服务器，JWT/限流/CORS 中间件，SSE 流式，热重载 | Module 注册路由和中间件 |
 
@@ -405,8 +408,11 @@ ag, err := ac.ToBuilder().
     WithProvider(prov).
     WithPipeline(pipe).
     WithSkills(timeSkill, weatherSkill).
+    WithKnowledge(knowledge.New(myStore, knowledge.DefaultConfig())).
     Build()
 ```
+
+`WithKnowledge()` 将一个知识组件挂载到 Agent 上，构建后可通过 `Agent.Knowledge()` 获取。未调用 `WithKnowledge()` 的 Agent 没有知识能力，`Agent.Knowledge()` 返回 nil。
 
 ### 工具调用
 
@@ -445,7 +451,7 @@ type Entry struct {
 
 ### 扩展系统
 
-Agent 通过 `Extension` 接口支持外部模块（情绪、推理、调度器等）的挂载：
+Agent 通过 `Extension` 接口支持外部模块（情绪、推理、调度器、知识系统等）的挂载：
 
 ```go
 type Extension interface {
@@ -455,6 +461,13 @@ type Extension interface {
 ```
 
 扩展通过 Builder 的 `WithExtensions()` 注入，构建后通过 `GetExtension(id)` 或 `GetComponent(id)` 查找。
+
+Extension 支持两个可选子接口：
+
+- **`MiddlewareProvider`** — 扩展贡献中间件，构建时自动注入 Agent Pipeline
+- **`ToolProvider`** — 扩展贡献 Agent 可调用工具，构建时自动注册到 Agent 工具列表
+
+知识系统（Knowledge）同时实现了上述两个接口：当 `AutoInject` 开启时贡献中间件，当配置了 WebSearchRetriever / WebFetchRetriever 时自动注册 `search_web` / `fetch_url` / `search_knowledge` 工具。
 
 ---
 
@@ -639,6 +652,157 @@ ag, _ := ac.ToBuilder().
 
 ---
 
+## 知识系统
+
+框架内置**可插拔的知识系统**（`pkg/knowledge/`），每个 Agent 可独立选择是否挂载知识能力。知识系统的设计围绕三个核心抽象：
+
+| 抽象 | 职责 | 内置实现 |
+|------|------|----------|
+| **Store** | 知识存储后端（增删查） | `InMemoryStore`（关键词 / 语义搜索） |
+| **Retriever** | 单源检索策略 | `StoreRetriever` / `WebSearchRetriever` / `WebFetchRetriever` |
+| **Knowledge** | 组件封装 + 多源聚合 + 工具注册 | 组合多个 Retriever，自动导出 Tool |
+
+### 核心概念
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Knowledge 组件                         │
+│  ┌──────────┐  ┌──────────────┐  ┌─────────────────┐   │
+│  │ Store    │  │WebSearch     │  │ WebFetch        │   │
+│  │Retriever │  │Retriever     │  │ Retriever       │   │
+│  │(本地文档) │  │(互联网搜索)   │  │(网页抓取)       │   │
+│  └────┬─────┘  └──────┬───────┘  └────────┬────────┘   │
+│       └───────┬───────┘───────────────────┘            │
+│               ▼                                        │
+│      HybridRetriever (扇出→合并→去重→排序)              │
+│               │                                        │
+│        ┌──────┴──────┐                                 │
+│        │  AutoInject  │  ← MiddlewareProvider           │
+│        │  (中间件)     │                                  │
+│        ├─────────────┤                                  │
+│        │  search_web │                                  │
+│        │  fetch_url  │  ← ToolProvider                  │
+│        │search_knowl.│  (LLM 自主调用)                   │
+│        └─────────────┘                                  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 知识集成模式
+
+两种模式可同时使用：
+
+**1. Auto-Inject 模式（中间件自动注入）**
+
+开启后，每次 Chat() 前自动检索相关文档并注入系统提示词：
+
+```go
+cfg := knowledge.Config{AutoInject: true, TopK: 5}
+kn := knowledge.New(myStore, cfg)
+
+ag, _ := ac.ToBuilder().
+    WithProvider(prov).
+    WithPipeline(pipe).
+    WithKnowledge(kn).
+    Build()
+```
+
+**2. 手动模式（LLM 自主调用 Tool）**
+
+配置 WebSearchRetriever 后，LLM 可在对话中自主决定是否搜索互联网：
+
+```go
+webSearch := knowledge.NewWebSearchRetriever(mySearchAPIFunc)
+webFetch := knowledge.NewWebFetchRetriever(myFetchFunc)
+
+kn := knowledge.NewWithRetrievers(knowledge.DefaultConfig(),
+    knowledge.NewStoreRetriever("docs", myStore),
+    webSearch,
+    webFetch,
+)
+
+ag, _ := ac.ToBuilder().
+    WithProvider(prov).
+    WithPipeline(pipe).
+    WithKnowledge(kn).
+    Build()
+// 工具 search_knowledge / search_web / fetch_url 自动注册到 Agent
+```
+
+LLM 可在对话中调用以下工具：
+
+| 工具名 | 功能 | 条件 |
+|--------|------|------|
+| `search_knowledge` | 搜索所有注册的 Retriever | 始终可用 |
+| `search_web` | 搜索互联网（调用 searchFn） | 需配置 WebSearchRetriever |
+| `fetch_url` | 抓取指定 URL 的文本内容 | 需配置 WebFetchRetriever |
+
+### Retriever 接口
+
+```go
+type Retriever interface {
+    ID() string
+    Retrieve(ctx context.Context, query string, opts ...SearchOption) ([]*Result, error)
+}
+```
+
+内置实现：
+
+| Retriever | 用途 | 构造方式 |
+|-----------|------|----------|
+| `StoreRetriever` | 包装任意 Store 为 Retriever | `NewStoreRetriever(id, store)` |
+| `WebSearchRetriever` | 互联网搜索（可注入搜索函数） | `NewWebSearchRetriever(searchFn)` |
+| `WebFetchRetriever` | URL 页面抓取（可注入 fetch 函数） | `NewWebFetchRetriever(fetchFn)` |
+| `HybridRetriever` | 多 Retriever 并行扇出 + 去重合并 | `NewHybridRetriever(id, rs...)` |
+
+### HybridRetriever 合并策略
+
+`HybridRetriever.Retrieve()` 的执行流程：
+
+1. **扇出** — 对所有子 Retriever 并行调用 `Retrieve()`
+2. **合并去重** — 按 Result.ID 去重，同一 ID 保留最高得分
+3. **阈值过滤** — 丢弃低于 `Threshold` 的低分结果
+4. **降序排序** — 按 Score 从高到低排列
+5. **TopK 截断** — 保留前 K 条结果
+
+### Knowledge.Search() 多源检索
+
+`Knowledge.Search()` 自动检测 Retriever 数量：
+- 单 Retriever → 直接委托
+- 多 Retriever → 使用 HybridRetriever 并行查询所有源
+
+```go
+results, err := kn.Search(ctx, "量子计算", knowledge.WithTopK(10))
+// results 包含 Store + WebSearch + WebFetch 的合并去重结果
+```
+
+### 运行时访问
+
+```go
+// Agent 构建后，随时获取知识组件
+kn := agent.Knowledge()
+if kn != nil {
+    results, _ := kn.Search(ctx, "user query")
+    // 处理结果
+}
+```
+
+### 自定义 Store
+
+实现 `Store` 接口即可接入任何后端（pgvector、Elasticsearch、MongoDB 等）：
+
+```go
+type MyVectorStore struct { ... }
+
+func (s *MyVectorStore) Store(ctx context.Context, docs ...*knowledge.Document) error { ... }
+func (s *MyVectorStore) Search(ctx context.Context, query string, opts ...knowledge.SearchOption) ([]*knowledge.Result, error) { ... }
+func (s *MyVectorStore) Delete(ctx context.Context, ids ...string) error { ... }
+func (s *MyVectorStore) Close() error { ... }
+```
+
+然后用 `NewStoreRetriever("my-store", myStore)` 将其作为 Retriever 接入 Knowledge 组件。
+
+---
+
 ## 安全守卫
 
 框架内置安全守卫，通过 Guard 接口实现输入/输出内容过滤。Guard 为 nil 时全部放行。
@@ -752,6 +916,7 @@ pkg/
   driver/             LLM 驱动层
   edge/               边缘计算
   inference/          推理路由器
+  knowledge/          知识系统（Store/Retriever 接口 + 多源检索 + 工具注册）
   memory/             记忆存储接口 + InMemoryStore 实现
   module/             模块插件系统（Module 接口 + InitContext + 健康检查）
   pipeline/           中间件管道（Handler/Middleware/Pipeline + 流式 + PostHook）

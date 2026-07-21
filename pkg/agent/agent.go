@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/anrror/y-ai-agent-base/pkg/component"
+	"github.com/anrror/y-ai-agent-base/pkg/knowledge"
 	"github.com/anrror/y-ai-agent-base/pkg/memory"
 	"github.com/anrror/y-ai-agent-base/pkg/pipeline"
 	"github.com/anrror/y-ai-agent-base/pkg/provider"
@@ -199,6 +200,20 @@ func (a *Agent) GetExtension(id string) Extension {
 		return nil
 	}
 	return a.Extensions[id]
+}
+
+// Knowledge returns the Knowledge component attached to this agent,
+// or nil when the agent has no knowledge capability.
+//
+// Safe for concurrent use (the Extensions map is set once at build time
+// and never mutated after).
+func (a *Agent) Knowledge() *knowledge.Knowledge {
+	ext := a.GetExtension(knowledge.ComponentID)
+	if ext == nil {
+		return nil
+	}
+	k, _ := ext.(*knowledge.Knowledge)
+	return k
 }
 
 // GetComponent returns the Component registered under the given id from the

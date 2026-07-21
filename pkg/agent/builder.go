@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/anrror/y-ai-agent-base/pkg/component"
+	"github.com/anrror/y-ai-agent-base/pkg/knowledge"
 	"github.com/anrror/y-ai-agent-base/pkg/memory"
 	"github.com/anrror/y-ai-agent-base/pkg/pipeline"
 	"github.com/anrror/y-ai-agent-base/pkg/provider"
@@ -67,6 +68,38 @@ func (b *Builder) WithExtensions(exts ...Extension) *Builder {
 	return b
 }
 
+// WithKnowledge attaches a knowledge store to the agent as a
+// Knowledge component (extension). Each agent independently decides
+// whether to use knowledge — agents without WithKnowledge() simply
+// have no knowledge capability.
+//
+// The Knowledge component is registered under the ID "knowledge" and
+// can be retrieved at runtime via Agent.Knowledge().
+//
+// Example:
+//
+//	store := knowledge.NewInMemoryStore()
+//	ag, err := ac.ToBuilder().
+//	    WithProvider(prov).
+//	    WithPipeline(pipe).
+//	    WithKnowledge(knowledge.New(store, knowledge.DefaultConfig())).
+//	    Build()
+//
+// Or with auto-inject enabled:
+//
+//	cfg := knowledge.Config{AutoInject: true, TopK: 5}
+//	ag, err := ac.ToBuilder().
+//	    WithProvider(prov).
+//	    WithPipeline(pipe).
+//	    WithKnowledge(knowledge.New(store, cfg)).
+//	    Build()
+func (b *Builder) WithKnowledge(kn *knowledge.Knowledge) *Builder {
+	if kn != nil {
+		b.extensions = append(b.extensions, kn)
+	}
+	return b
+}
+
 // WithComponent is a convenience method that delegates to WithExtensions.
 // Every Component implements Extension, so this is purely for API clarity:
 // use WithExtensions for general-purpose modules, and WithComponent when
@@ -100,7 +133,8 @@ func (b *Builder) Build() (*Agent, error) {
 		allTools = append(allTools, sk.Tools()...)
 	}
 
-	// Build extensions map and collect MiddlewareProvider extensions.
+	// Build extensions map, collect MiddlewareProvider extensions,
+	// and collect tools from ToolProvider extensions.
 	exts := make(map[string]Extension, len(b.extensions))
 	var extMWs []pipeline.Middleware
 	for _, ext := range b.extensions {
@@ -110,6 +144,9 @@ func (b *Builder) Build() (*Agent, error) {
 		exts[ext.ID()] = ext
 		if mp, ok := ext.(MiddlewareProvider); ok {
 			extMWs = append(extMWs, mp.Middleware())
+		}
+		if tp, ok := ext.(ToolProvider); ok {
+			allTools = append(allTools, tp.Tools()...)
 		}
 	}
 
