@@ -10,6 +10,7 @@ import (
 
 	"github.com/anrror/y-ai-agent-base/pkg/component"
 	"github.com/anrror/y-ai-agent-base/pkg/knowledge"
+	"github.com/anrror/y-ai-agent-base/pkg/mcp"
 	"github.com/anrror/y-ai-agent-base/pkg/memory"
 	"github.com/anrror/y-ai-agent-base/pkg/pipeline"
 	"github.com/anrror/y-ai-agent-base/pkg/provider"
@@ -28,6 +29,10 @@ type Agent struct {
 	Tools    []tool.Tool
 	Memory   memory.Store
 	Skills   []Skill
+
+	// MCPRegistry holds the MCP server connections for dynamic tool
+	// resolution during Chat(). When nil, MCP tool resolution is skipped.
+	MCPRegistry *mcp.Registry
 
 	// Extensions holds external modules (emotion, reasoning, scheduler,
 	// cache, compressor, edge, driver, etc.) attached via the Builder's
@@ -105,13 +110,25 @@ func (a *Agent) Chat(ctx context.Context, input *types.ChatInput) (*types.ChatOu
 	copy(tools, a.Tools)
 	provider := a.Provider
 	pipeline := a.Pipeline
+	mcpReg := a.MCPRegistry
 	a.mu.RUnlock()
 
+	// Resolve MCP tools: merge agent config with session-level overrides.
+	mcpTools, err := resolveSessionMCP(mcpReg, a.Config.MCP, input.MCP)
+	if err != nil {
+		return nil, fmt.Errorf("agent: resolve MCP: %w", err)
+	}
+
+	// Combine base tools + MCP tools for this session.
+	sessionTools := make([]tool.Tool, 0, len(tools)+len(mcpTools))
+	sessionTools = append(sessionTools, tools...)
+	sessionTools = append(sessionTools, mcpTools...)
+
 	for i := 0; i < maxToolIterations; i++ {
-		// Attach agent's tools to the provider before each call.
-		if len(tools) > 0 {
+		// Attach tools to the provider before each call.
+		if len(sessionTools) > 0 {
 			if tp, ok := provider.(interface{ SetTools([]tool.Tool) }); ok {
-				tp.SetTools(tools)
+				tp.SetTools(sessionTools)
 			}
 		}
 
@@ -145,7 +162,7 @@ func (a *Agent) Chat(ctx context.Context, input *types.ChatInput) (*types.ChatOu
 
 		// Execute each tool and append tool result messages.
 		for _, tc := range toolCalls {
-			toolMsg := a.executeTool(ctx, tc, tools)
+			toolMsg := a.executeTool(ctx, tc, sessionTools)
 			req.Messages = append(req.Messages, toolMsg)
 		}
 	}
@@ -428,3 +445,35 @@ type _agentInterface interface {
 }
 
 var _ _agentInterface = (*Agent)(nil)
+
+// resolveSessionMCP resolves the effective MCP tool set by merging
+// the agent's default MCP config with optional per-session overrides.
+//
+// Priority (highest wins):
+//  1. Session overrides (when input.MCP != nil)
+//  2. Agent config defaults (Config.MCP)
+//
+// When session overrides explicitly disable MCP (Enabled=false),
+// no MCP tools are returned regardless of agent config.
+func resolveSessionMCP(reg *mcp.Registry, agentCfg MCPConfig, sessionCfg *types.MCPSessionConfig) ([]tool.Tool, error) {
+	if reg == nil {
+		return nil, nil
+	}
+
+	// Determine effective enabled flag.
+	enabled := agentCfg.Enabled
+	if sessionCfg != nil && sessionCfg.Enabled != nil {
+		enabled = *sessionCfg.Enabled
+	}
+	if !enabled {
+		return nil, nil
+	}
+
+	// Determine effective server list.
+	servers := agentCfg.Servers
+	if sessionCfg != nil && sessionCfg.Servers != nil {
+		servers = sessionCfg.Servers
+	}
+
+	return mcp.ResolveTools(reg, servers)
+}

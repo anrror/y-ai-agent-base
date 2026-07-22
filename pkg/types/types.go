@@ -66,6 +66,18 @@ type SessionState struct {
 	Active    bool           `json:"active"`
 }
 
+// MCPSessionConfig allows per-session override of an agent's MCP tool
+// configuration. When nil, the agent's default MCPConfig is used.
+type MCPSessionConfig struct {
+	// Enabled overrides the agent's MCP.Enabled flag.
+	// nil = use agent default, &false = disable MCP for this session.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Servers overrides the agent's MCP.Servers list.
+	// nil = use agent default, empty slice = no MCP servers.
+	Servers []string `json:"servers,omitempty"`
+}
+
 // ChatInput is the input for a chat completion request.
 type ChatInput struct {
 	Messages     []Message      `json:"messages"`
@@ -74,6 +86,12 @@ type ChatInput struct {
 	Tools        []string       `json:"tools,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	Timeout      time.Duration  `json:"timeout,omitempty"` // per-request timeout, 0 = use default or model config
+
+	// MCP allows per-session override of the agent's MCP tool configuration.
+	// When nil, the agent's default MCP config applies.
+	// Use this to enable/disable MCP tools or select different servers
+	// for individual conversations.
+	MCP *MCPSessionConfig `json:"mcp,omitempty"`
 
 	// Tenant identity — together they scope sessions, memory, metrics.
 	//

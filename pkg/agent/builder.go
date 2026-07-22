@@ -6,6 +6,7 @@ import (
 
 	"github.com/anrror/y-ai-agent-base/pkg/component"
 	"github.com/anrror/y-ai-agent-base/pkg/knowledge"
+	"github.com/anrror/y-ai-agent-base/pkg/mcp"
 	"github.com/anrror/y-ai-agent-base/pkg/memory"
 	"github.com/anrror/y-ai-agent-base/pkg/pipeline"
 	"github.com/anrror/y-ai-agent-base/pkg/provider"
@@ -23,6 +24,8 @@ type Builder struct {
 	memory     memory.Store
 	skills     []Skill
 	extensions []Extension
+	mcpReg     *mcp.Registry
+	mcpTools   []tool.Tool // pre-resolved MCP tools (lazy)
 }
 
 // WithProvider sets the LLM provider for the agent.
@@ -100,6 +103,34 @@ func (b *Builder) WithKnowledge(kn *knowledge.Knowledge) *Builder {
 	return b
 }
 
+// WithMCPRegistry sets the MCP server registry for this agent.
+//
+// The registry holds MCP server connections managed by the host system.
+// During Build(), the agent resolves tools from the servers listed in
+// its Config.MCP.Servers (or all servers when the list is empty).
+//
+// Example:
+//
+//	reg := mcp.NewRegistry()
+//	reg.Add(mcp.NewServer("fs", myFSClient))
+//
+//	cfg := agent.Config{
+//	    AgentID: "assistant",
+//	    MCP: agent.MCPConfig{
+//	        Enabled: true,
+//	        Servers: []string{"fs"},
+//	    },
+//	}
+//	ag, _ := cfg.ToBuilder().
+//	    WithProvider(prov).
+//	    WithPipeline(pipe).
+//	    WithMCPRegistry(reg).
+//	    Build()
+func (b *Builder) WithMCPRegistry(reg *mcp.Registry) *Builder {
+	b.mcpReg = reg
+	return b
+}
+
 // WithComponent is a convenience method that delegates to WithExtensions.
 // Every Component implements Extension, so this is purely for API clarity:
 // use WithExtensions for general-purpose modules, and WithComponent when
@@ -150,6 +181,15 @@ func (b *Builder) Build() (*Agent, error) {
 		}
 	}
 
+	// Resolve MCP tools from registry when MCP is enabled.
+	if b.config.MCP.Enabled && b.mcpReg != nil {
+		mcpTools, err := mcp.ResolveTools(b.mcpReg, b.config.MCP.Servers)
+		if err != nil {
+			return nil, fmt.Errorf("agent: resolve MCP tools: %w", err)
+		}
+		allTools = append(allTools, mcpTools...)
+	}
+
 	// Wrap the shared pipeline with per-agent extension middlewares to
 	// prevent cross-contamination: without wrapping, b.pipeline.Use() would
 	// mutate the shared pipeline, causing Agent A's extension middleware
@@ -190,6 +230,7 @@ func (b *Builder) Build() (*Agent, error) {
 		Tools:             allTools,
 		Memory:            b.memory,
 		Skills:            b.skills,
+		MCPRegistry:       b.mcpReg,
 		Extensions:        exts,
 		ComponentRegistry: compReg,
 	}, nil

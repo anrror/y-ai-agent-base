@@ -22,6 +22,8 @@ vendor/
 # Environment & secrets
 .env
 .env.*
+*.env
+*.local
 *.pem
 *.key
 

@@ -82,6 +82,24 @@ type Config struct {
 	SafetyConfig types.SafetyConfig    `json:"safety_config,omitempty"`
 	Status       AgentStatus       `json:"status"`
 	PromptTmpl   string            `json:"prompt_tmpl,omitempty"`
+	MCP          MCPConfig         `json:"mcp,omitempty"`
+}
+
+// MCPConfig controls MCP (Model Context Protocol) tool integration
+// for this agent. MCP allows the agent to discover and call tools
+// from external MCP servers.
+//
+// The actual MCP server connections are managed by the host system
+// through a *mcp.Registry passed to the Builder.
+type MCPConfig struct {
+	// Enabled enables MCP tool integration for this agent.
+	// When false (default), no MCP tools are attached.
+	Enabled bool `json:"enabled"`
+
+	// Servers lists the MCP server names (from the Registry) that
+	// this agent may use. An empty slice means "use all available
+	// servers in the registry".
+	Servers []string `json:"servers,omitempty"`
 }
 
 // FillDefaults sets sensible defaults on optional configuration blocks.
